@@ -5,24 +5,305 @@ import pandas as pd
 import numpy as np
 import torch
 import tqdm
-import dill
-import json
 
-from .dataframe import EncoderDataFrame
-from .logging import BasicLogger, IpynbLogger, TensorboardXLogger
-from .scalers import StandardScaler, NullScaler, GaussRankScaler
+# from .dataframe import EncoderDataFrame
+# from .logging import BasicLogger, IpynbLogger, TensorboardXLogger
+# from .scalers import StandardScaler, NullScaler, GaussRankScaler
 
+import numpy as np
+from sklearn.preprocessing import QuantileTransformer
 
+class StandardScaler(object):
+    """Impliments standard (mean/std) scaling."""
 
+    def __init__(self):
+        self.mean = None
+        self.std = None
 
-def load_model(path):
+    def fit(self, x):
+        self.mean = x.mean()
+        self.std = x.std()
+
+    def transform(self, x):
+        result = x.astype(float)
+        result -= self.mean
+        result /= self.std
+        return result
+
+    def inverse_transform(self, x):
+        result = x.astype(float)
+        result *= self.std
+        result += self.mean
+        return result
+
+    def fit_transform(self, x):
+        self.fit(x)
+        return self.transform(x)
+
+class GaussRankScaler(object):
     """
-    Loads serialized model from input path.
+    So-called "Gauss Rank" scaling.
+    Forces a transformation, uses bins to perform
+        inverse mapping.
+
+    Uses sklearn QuantileTransformer to work.
     """
-    with open(path, 'rb') as f:
-        loaded_serialized_model = f.read()
-        loaded_model = dill.loads(loaded_serialized_model)
-    return loaded_model
+
+    def __init__(self):
+        self.transformer = QuantileTransformer(output_distribution='normal')
+
+    def fit(self, x):
+        x = x.reshape(-1, 1)
+        self.transformer.fit(x)
+
+    def transform(self, x):
+        x = x.reshape(-1, 1)
+        result = self.transformer.transform(x)
+        return result.reshape(-1)
+
+    def inverse_transform(self, x):
+        x = x.reshape(-1, 1)
+        result = self.transformer.inverse_transform(x)
+        return result.reshape(-1)
+
+    def fit_transform(self, x):
+        self.fit(x)
+        return self.transform(x)
+
+class NullScaler(object):
+
+    def __init__(self):
+        pass
+
+    def fit(self, x):
+        pass
+
+    def transform(self, x):
+        return x
+
+    def inverse_transform(self, x):
+        return x
+
+    def fit_transform(self, x):
+        return self.transform(x)
+
+
+class EncoderDataFrame(pd.DataFrame):
+    def __init__(self, *args, **kwargs):
+        super(EncoderDataFrame, self).__init__(*args, **kwargs)
+
+    def swap(self, likelihood=.15):
+        """
+        Performs random swapping of data.
+        Each value has a likelihood of *argument likelihood*
+            of being randomly replaced with a value from a different
+            row.
+        Returns a copy of the dataframe with equal size.
+        """
+
+        #select values to swap
+        tot_rows = self.__len__()
+        n_rows = int(round(tot_rows*likelihood))
+        n_cols = len(self.columns)
+
+        def gen_indices():
+            column = np.repeat(np.arange(n_cols).reshape(1, -1), repeats=n_rows, axis=0)
+            row = np.random.randint(0, tot_rows, size=(n_rows, n_cols))
+            return row, column
+
+        row, column = gen_indices()
+        new_mat = self.values
+        to_place = new_mat[row, column]
+
+        row, column = gen_indices()
+        new_mat[row, column] = to_place
+
+        dtypes = {col:typ for col, typ in zip(self.columns, self.dtypes)}
+        result = EncoderDataFrame(columns=self.columns, data=new_mat)
+        result = result.astype(dtypes, copy=False)
+
+        return result
+
+    
+from collections import OrderedDict
+import math
+from time import time
+
+import numpy as np
+
+class BasicLogger(object):
+    """A minimal class for logging training progress."""
+
+    def __init__(self, fts, baseline_loss=0.0):
+        """Pass a list of fts as argument."""
+        self.fts = fts
+        self.train_fts = OrderedDict()
+        self.val_fts = OrderedDict()
+        self.id_val_fts = OrderedDict()
+        for ft in self.fts:
+            self.train_fts[ft] = [[], []]
+            self.val_fts[ft] = [[], []]
+            self.id_val_fts[ft] = [[], []]
+        self.n_epochs = 0
+        self.baseline_loss = baseline_loss
+
+    def training_step(self, losses):
+        for i, ft in enumerate(self.fts):
+            self.train_fts[ft][0].append(losses[i])
+
+    def val_step(self, losses):
+        for i, ft in enumerate(self.fts):
+            self.val_fts[ft][0].append(losses[i])
+
+    def id_val_step(self, losses):
+        for i, ft in enumerate(self.fts):
+            self.id_val_fts[ft][0].append(losses[i])
+
+    def end_epoch(self):
+        self.n_epochs += 1
+        for i, ft in enumerate(self.fts):
+            mean = np.array(self.train_fts[ft][0]).mean()
+            self.train_fts[ft][1].append(mean)
+            #reset train_fts log
+            self.train_fts[ft][0] = []
+            if len(self.val_fts[ft][0]) > 0:
+                mean = np.array(self.val_fts[ft][0]).mean()
+                self.val_fts[ft][1].append(mean)
+                #reset val_fts log
+                self.val_fts[ft][0] = []
+            if len(self.id_val_fts[ft][0]) > 0:
+                mean = np.array(self.id_val_fts[ft][0]).mean()
+                self.id_val_fts[ft][1].append(mean)
+                #reset id_val_fts log
+                self.id_val_fts[ft][0] = []
+
+class IpynbLogger(BasicLogger):
+    """Plots Logging Data in jupyter notebook"""
+
+    def __init__(self, *args, **kwargs):
+        super(IpynbLogger, self).__init__(*args, **kwargs)
+        import matplotlib.pyplot as plt
+        from IPython.display import clear_output
+        self.plt = plt
+        self.clear_output = clear_output
+
+    def end_epoch(self, val_losses=None):
+        super(IpynbLogger, self).end_epoch()
+        if self.n_epochs > 1:
+            self.plot_progress()
+
+    def plot_progress(self):
+        self.clear_output()
+        x = list(range(1, self.n_epochs+1))
+        train_loss = [self.train_fts[ft][1] for ft in self.fts]
+        train_loss = np.array(train_loss).mean(axis=0)
+        self.plt.plot(x, train_loss, label='train loss', color='orange')
+
+        if len(self.val_fts[self.fts[0]]) > 0:
+            self.plt.axhline(
+                y=self.baseline_loss,
+                linestyle='dotted',
+                label='baseline val loss',
+                color='blue'
+            )
+            val_loss = [self.val_fts[ft][1] for ft in self.fts]
+            val_loss = np.array(val_loss).mean(axis=0)
+            self.plt.plot(x, val_loss, label='val loss', color='blue')
+
+        if len(self.id_val_fts[self.fts[0]]) > 0:
+            id_val_loss = [self.id_val_fts[ft][1] for ft in self.fts]
+            id_val_loss = np.array(id_val_loss).mean(axis=0)
+            self.plt.plot(x, id_val_loss, label='identity val loss', color='pink')
+
+        self.plt.ylim(0, max(1, math.floor(2*self.baseline_loss)))
+        self.plt.legend()
+        self.plt.xlabel('epochs')
+        self.plt.ylabel('loss')
+        self.plt.show();
+
+class TensorboardXLogger(BasicLogger):
+
+    def __init__(self, logdir='logdir/', run=None, *args, **kwargs):
+        super(TensorboardXLogger, self).__init__(*args, **kwargs)
+        from tensorboardX import SummaryWriter
+        import os
+
+        if run is None:
+            try:
+                n_runs = len(os.listdir(logdir))
+            except FileNotFoundError:
+                n_runs = 0
+            logdir = logdir+f'{n_runs:04d}'
+        else:
+            logdir = logdir + str(run)
+        self.writer = SummaryWriter(logdir)
+        self.n_train_step = 0
+        self.n_val_step = 0
+        self.n_id_val_step = 0
+
+    def training_step(self, losses):
+        self.n_train_step += 1
+        losses = np.array(losses)
+        for i, ft in enumerate(self.fts):
+            self.writer.add_scalar('online' + f'_{ft}_' + 'train_loss', losses[i], self.n_train_step)
+            self.train_fts[ft][0].append(losses[i])
+        self.writer.add_scalar('online' + '_mean_' + 'train_loss', losses.mean(), self.n_train_step)
+
+    def val_step(self, losses):
+        #self.n_val_step += 1
+        for i, ft in enumerate(self.fts):
+            #self.writer.add_scalar(f'_{ft}_' + 'val_loss', losses[i], self.n_val_step)
+            self.val_fts[ft][0].append(losses[i])
+
+    def id_val_step(self, losses):
+        #self.n_id_val_step += 1
+        for i, ft in enumerate(self.fts):
+            #self.writer.add_scalar(f'_{ft}_' + 'id_loss', losses[i], self.n_id_val_step)
+            self.id_val_fts[ft][0].append(losses[i])
+
+    def end_epoch(self, val_losses=None):
+        super(TensorboardXLogger, self).end_epoch()
+
+        train_loss = [self.train_fts[ft][1][-1] for ft in self.fts]
+        for i, ft in enumerate(self.fts):
+            self.writer.add_scalar(f'{ft}_' + 'train_loss', train_loss[i], self.n_epochs)
+        train_loss = np.array(train_loss).mean()
+        self.writer.add_scalar('mean_train_loss', train_loss, self.n_epochs)
+
+        val_loss = [self.val_fts[ft][1][-1] for ft in self.fts]
+        for i, ft in enumerate(self.fts):
+            self.writer.add_scalar(f'{ft}_' + 'val_loss', val_loss[i], self.n_epochs)
+        val_loss = np.array(val_loss).mean()
+        self.writer.add_scalar('mean_val_loss', val_loss, self.n_epochs)
+
+        id_val_loss = [self.id_val_fts[ft][1][-1] for ft in self.fts]
+        for i, ft in enumerate(self.fts):
+            self.writer.add_scalar(f'{ft}_' + 'train_loss', id_val_loss[i], self.n_epochs)
+        id_val_loss = np.array(id_val_loss).mean()
+        self.writer.add_scalar('mean_id_val_loss', id_val_loss, self.n_epochs)
+
+    def show_embeddings(self, categories):
+        for ft in categories:
+            feature = categories[ft]
+            cats = feature['cats'] + ['_other']
+            emb = feature['embedding']
+            mat = emb.weight.data.cpu().numpy()
+            self.writer.add_embedding(mat, metadata=cats, tag=ft, global_step=self.n_epochs)
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def ohe(input_vector, dim, device="cpu"):
     """Does one-hot encoding of input vector."""
@@ -37,6 +318,7 @@ def ohe(input_vector, dim, device="cpu"):
 
     return y_onehot
 
+
 def compute_embedding_size(n_categories):
     """
     Applies a standard formula to choose the number of feature embeddings
@@ -44,29 +326,8 @@ def compute_embedding_size(n_categories):
 
     n_categories is the number of unique categories in a column.
     """
-    val = min(600, round(1.6 * n_categories**0.56))
+    val = min(600, round(1.6 * n_categories ** 0.56))
     return int(val)
-
-class NullIndicator(object):
-    """
-    Utility to generate indicator features
-    binary features indicating whether an input
-    was null in the original dataframe.
-    """
-
-    def __init__(self, required_fts=[]):
-        self.fts = required_fts
-
-    def fit(self, df):
-        columns = df.isna().any()
-        self.fts += list(columns.index[columns.values])
-
-    def transform(self, df):
-        for ft in self.fts:
-            col = df[ft].isna()
-            df[ft + '_was_nan'] = col
-        return df
-
 
 
 class CompleteLayer(torch.nn.Module):
@@ -82,7 +343,7 @@ class CompleteLayer(torch.nn.Module):
             dropout=None,
             *args,
             **kwargs
-        ):
+    ):
         super(CompleteLayer, self).__init__(*args, **kwargs)
         self.layers = []
         linear = torch.nn.Linear(in_dim, out_dim)
@@ -100,19 +361,19 @@ class CompleteLayer(torch.nn.Module):
         if act is None:
             act = self.activation
         activations = {
-            'leaky_relu':torch.nn.functional.leaky_relu,
-            'relu':torch.relu,
-            'sigmoid':torch.sigmoid,
-            'tanh':torch.tanh,
-            'selu':torch.selu,
-            'hardtanh':torch.nn.functional.hardtanh,
-            'relu6':torch.nn.functional.relu6,
-            'elu':torch.nn.functional.elu,
-            'celu':torch.nn.functional.celu,
-            'rrelu':torch.nn.functional.rrelu,
-            'hardshrink':torch.nn.functional.hardshrink,
-            'tanhshrink':torch.nn.functional.tanhshrink,
-            'softsign':torch.nn.functional.softsign
+            'leaky_relu': torch.nn.functional.leaky_relu,
+            'relu': torch.relu,
+            'sigmoid': torch.sigmoid,
+            'tanh': torch.tanh,
+            'selu': torch.selu,
+            'hardtanh': torch.nn.functional.hardtanh,
+            'relu6': torch.nn.functional.relu6,
+            'elu': torch.nn.functional.elu,
+            'celu': torch.nn.functional.celu,
+            'rrelu': torch.nn.functional.rrelu,
+            'hardshrink': torch.nn.functional.hardshrink,
+            'tanhshrink': torch.nn.functional.tanhshrink,
+            'softsign': torch.nn.functional.softsign
         }
         try:
             return activations[act]
@@ -126,6 +387,7 @@ class CompleteLayer(torch.nn.Module):
         for layer in self.layers:
             x = layer(x)
         return x
+
 
 class AutoEncoder(torch.nn.Module):
 
@@ -162,12 +424,11 @@ class AutoEncoder(torch.nn.Module):
             scaler='standard',
             *args,
             **kwargs
-        ):
+    ):
         super(AutoEncoder, self).__init__(*args, **kwargs)
         self.numeric_fts = OrderedDict()
         self.binary_fts = OrderedDict()
         self.categorical_fts = OrderedDict()
-        self.cyclical_fts = OrderedDict()
         self.encoder_layers = encoder_layers
         self.decoder_layers = decoder_layers
         self.encoder_activations = encoder_activations
@@ -193,12 +454,12 @@ class AutoEncoder(torch.nn.Module):
         self.optimizer = optimizer
         self.lr = lr
         self.lr_decay = lr_decay
-        self.amsgrad=amsgrad
-        self.momentum=momentum
-        self.betas=betas
-        self.dampening=dampening
-        self.weight_decay=weight_decay
-        self.nesterov=nesterov
+        self.amsgrad = amsgrad
+        self.momentum = momentum
+        self.betas = betas
+        self.dampening = dampening
+        self.weight_decay = weight_decay
+        self.nesterov = nesterov
         self.optim = None
         self.progress_bar = progress_bar
 
@@ -224,58 +485,46 @@ class AutoEncoder(torch.nn.Module):
 
     def get_scaler(self, name):
         scalers = {
-            'standard':StandardScaler,
-            'gauss_rank':GaussRankScaler,
-            None:NullScaler,
-            'none':NullScaler
+            'standard': StandardScaler,
+            'gauss_rank': GaussRankScaler,
+            None: NullScaler,
+            'none': NullScaler
         }
         return scalers[name]
 
     def init_numeric(self, df):
         dt = df.dtypes
         numeric = []
-        numeric += list(dt[dt==int].index)
-        numeric += list(dt[dt==float].index)
+        numeric += list(dt[dt == int].index)
+        numeric += list(dt[dt == float].index)
 
         if isinstance(self.scaler, str):
-            scalers = {ft:self.scaler for ft in numeric}
+            scalers = {ft: self.scaler for ft in numeric}
         elif isinstance(self.scaler, dict):
             scalers = self.scaler
 
         for ft in numeric:
             Scaler = self.get_scaler(scalers.get(ft, 'gauss_rank'))
             feature = {
-                'mean':df[ft].mean(),
-                'std':df[ft].std(),
-                'scaler':Scaler()
+                'mean': df[ft].mean(),
+                'std': df[ft].std(),
+                'scaler': Scaler()
             }
             feature['scaler'].fit(df[ft][~df[ft].isna()].values)
             self.numeric_fts[ft] = feature
 
-        for ft in self.cyclical_fts:
-            #we'll scale only the raw timestamp values
-            #for cyclical features
-            Scaler = self.get_scaler(scalers.get(ft, 'gauss_rank'))
-            data = df[ft].astype(int).astype(float)
-            feature = {
-                'mean':data.mean(),
-                'std':data.std(),
-                'scaler':Scaler()
-            }
-            feature['scaler'].fit(data[~data.isna()].values)
-            self.cyclical_fts[ft] = feature
-
-        self.num_names += list(self.numeric_fts.keys())
+        self.num_names = list(self.numeric_fts.keys())
 
     def init_cats(self, df):
         dt = df.dtypes
-        objects = list(dt[dt==pd.Categorical].index)
+        print(dt)
+        print(type(dt))
+        objects = list(dt[dt == pd.Categorical].index)
+        print(objects)
         for ft in objects:
             feature = {}
             vl = df[ft].value_counts()
             if len(vl) < 3:
-                #if there are less than 3 categories,
-                #treat as binary ft.
                 feature['cats'] = list(vl.index)
                 self.binary_fts[ft] = feature
                 continue
@@ -285,12 +534,11 @@ class AutoEncoder(torch.nn.Module):
 
     def init_binary(self, df):
         dt = df.dtypes
-        binaries = list(dt[dt==bool].index)
+        binaries = list(dt[dt == bool].index)
         for ft in self.binary_fts:
             feature = self.binary_fts[ft]
             for i, cat in enumerate(feature['cats']):
                 feature[cat] = bool(i)
-        #these are the 'true' binary features
         for ft in binaries:
             feature = dict()
             feature['cats'] = [True, False]
@@ -300,32 +548,16 @@ class AutoEncoder(torch.nn.Module):
 
         self.bin_names = list(self.binary_fts.keys())
 
-    def init_cyclical(self, df):
-        dt = df.dtypes
-        cyc = list(dt[dt=='datetime64[ns]'].index)
-        for ft in cyc:
-            feature = dict()
-            #just keeping track of names
-            self.cyclical_fts[ft] = None
-            self.num_names += [
-                ft,
-                ft + '_sin_tod', ft + '_cos_tod',
-                ft + '_sin_dow', ft + '_cos_dow',
-                ft + '_sin_dom', ft + '_cos_dom',
-                ft + '_sin_doy', ft + '_cos_doy'
-                ]
-
     def init_features(self, df):
-        self.init_cyclical(df)
         self.init_numeric(df)
         self.init_cats(df)
         self.init_binary(df)
 
     def build_inputs(self):
-        #will compute total number of inputs
+        # will compute total number of inputs
         input_dim = 0
 
-        #create categorical variable embedding layers
+        # create categorical variable embedding layers
         for ft in self.categorical_fts:
             feature = self.categorical_fts[ft]
             n_cats = len(feature['cats']) + 1
@@ -333,29 +565,23 @@ class AutoEncoder(torch.nn.Module):
             embed_layer = torch.nn.Embedding(n_cats, embed_dim)
             feature['embedding'] = embed_layer
             self.add_module(f'{ft} embedding', embed_layer)
-            #track embedding inputs
+            # track embedding inputs
             input_dim += embed_dim
 
-        #include numeric and binary fts
+        # include numeric and binary fts
         input_dim += len(self.numeric_fts)
         input_dim += len(self.binary_fts)
-
-        # 9 cyclical components 
-        # sin/cos time of day, sin/cos week, sin/cos month, sin/cos doy
-        # plus raw timestamp
-        input_dim += int(len(self.cyclical_fts) * 9)
 
         return input_dim
 
     def build_outputs(self, dim):
-        numeric_output = len(self.numeric_fts) + int(len(self.cyclical_fts) * 9)
-        self.numeric_output = torch.nn.Linear(dim, numeric_output)
+        self.numeric_output = torch.nn.Linear(dim, len(self.numeric_fts))
         self.binary_output = torch.nn.Linear(dim, len(self.binary_fts))
 
         for ft in self.categorical_fts:
             feature = self.categorical_fts[ft]
             cats = feature['cats']
-            layer = torch.nn.Linear(dim, len(cats)+1)
+            layer = torch.nn.Linear(dim, len(cats) + 1)
             feature['output_layer'] = layer
             self.add_module(f'{ft} output', layer)
 
@@ -365,40 +591,6 @@ class AutoEncoder(torch.nn.Module):
         Returns copy.
         """
         output_df = EncoderDataFrame()
-        for ft in self.cyclical_fts:
-            col = df[ft]
-
-            #handle raw timestamp as if it were numeric feature
-            feature = self.cyclical_fts[ft]
-            col = col.fillna(feature['mean'])
-            trans_col = feature['scaler'].transform(col.values)
-            trans_col = pd.Series(index=df.index, data=trans_col)
-            output_df[ft] = trans_col
-
-            #get time of day features
-            second_of_day = col.dt.hour * 60 * 60 + col.dt.minute * 60 + col.dt.second
-            period = 24 * 60 * 60
-            output_df[ft+'_sin_tod'] = np.sin(second_of_day/(period/(2*np.pi))).values
-            output_df[ft+'_cos_tod'] = np.cos(second_of_day/(period/(2*np.pi))).values
-
-            #get day of week features
-            day_of_week = col.dt.dayofweek
-            period = 7
-            output_df[ft+'_sin_dow'] = np.sin(day_of_week/(period/(2*np.pi))).values
-            output_df[ft+'_cos_dow'] = np.cos(day_of_week/(period/(2*np.pi))).values
-
-            #get day of month features
-            day_of_month = col.dt.day
-            period = 31 #approximate period
-            output_df[ft+'_sin_dom'] = np.sin(day_of_month/(period/(2*np.pi))).values
-            output_df[ft+'_cos_dom'] = np.cos(day_of_month/(period/(2*np.pi))).values
-
-            #get day of year
-            day_of_year = col.dt.dayofyear
-            period = 365
-            output_df[ft+'_sin_doy'] = np.sin(day_of_year/(period/(2*np.pi))).values
-            output_df[ft+'_cos_doy'] = np.cos(day_of_year/(period/(2*np.pi))).values
-
         for ft in self.numeric_fts:
             feature = self.numeric_fts[ft]
             col = df[ft].fillna(feature['mean'])
@@ -412,7 +604,7 @@ class AutoEncoder(torch.nn.Module):
 
         for ft in self.categorical_fts:
             feature = self.categorical_fts[ft]
-            col = pd.Categorical(df[ft], categories=feature['cats']+['_other'])
+            col = pd.Categorical(df[ft], categories=feature['cats'] + ['_other'])
             col = col.fillna('_other')
             output_df[ft] = col
 
@@ -451,13 +643,13 @@ class AutoEncoder(torch.nn.Module):
         if self.verbose:
             print('Building model...')
 
-        #get metadata from features
+        # get metadata from features
         self.init_features(df)
         input_dim = self.build_inputs()
 
-        #construct a canned denoising autoencoder architecture
+        # construct a canned denoising autoencoder architecture
         if self.encoder_layers is None:
-            self.encoder_layers = [int(4*input_dim) for _ in range(3)]
+            self.encoder_layers = [int(4 * input_dim) for _ in range(3)]
 
         if self.decoder_layers is None:
             self.decoder_layers = []
@@ -481,30 +673,29 @@ class AutoEncoder(torch.nn.Module):
             layer = CompleteLayer(
                 input_dim,
                 dim,
-                activation = activation,
-                dropout = self.encoder_dropout[i]
+                activation=activation,
+                dropout=self.encoder_dropout[i]
             )
             input_dim = dim
             self.encoder.append(layer)
             self.add_module(f'encoder_{i}', layer)
 
         for i, dim in enumerate(self.decoder_layers):
-
             activation = self.decoder_activations[i]
             layer = CompleteLayer(
                 input_dim,
                 dim,
-                activation = activation,
-                dropout = self.decoder_dropout[i]
+                activation=activation,
+                dropout=self.decoder_dropout[i]
             )
             input_dim = dim
             self.decoder.append(layer)
             self.add_module(f'decoder_{i}', layer)
 
-        #set up predictive outputs
+        # set up predictive outputs
         self.build_outputs(dim)
 
-        #get optimizer
+        # get optimizer
         self.optim = self.build_optimizer()
         if self.lr_decay is not None:
             self.lr_decay = torch.optim.lr_scheduler.ExponentialLR(self.optim, self.lr_decay)
@@ -517,7 +708,7 @@ class AutoEncoder(torch.nn.Module):
             self.logger = IpynbLogger(fts=fts)
         elif self.logger == 'tensorboard':
             self.logger = TensorboardXLogger(logdir=self.logdir, run=self.run, fts=fts)
-        #returns a copy of preprocessed dataframe.
+        # returns a copy of preprocessed dataframe.
         self.to(self.device)
 
         if self.verbose:
@@ -621,7 +812,7 @@ class AutoEncoder(torch.nn.Module):
         mse.backward(retain_graph=True)
         bce.backward(retain_graph=True)
         for i, ls in enumerate(cce):
-            if i == len(cce)-1:
+            if i == len(cce) - 1:
                 ls.backward(retain_graph=False)
             else:
                 ls.backward(retain_graph=True)
@@ -665,7 +856,7 @@ class AutoEncoder(torch.nn.Module):
 
         if self.optim is None:
             self.build_model(df)
-        if self.n_megabatches==1:
+        if self.n_megabatches == 1:
             df = self.prepare_df(df)
 
         if val is not None:
@@ -677,17 +868,17 @@ class AutoEncoder(torch.nn.Module):
             if self.verbose:
                 print(msg)
             result = []
-            val_batches = len(val_df)//self.eval_batch_size
+            val_batches = len(val_df) // self.eval_batch_size
             if len(val_df) % self.eval_batch_size != 0:
                 val_batches += 1
 
-        n_updates = len(df)//self.batch_size
+        n_updates = len(df) // self.batch_size
         if len(df) % self.batch_size > 0:
             n_updates += 1
         for i in range(epochs):
             self.train()
             if self.verbose:
-                print(f'training epoch {i+1}...')
+                print(f'training epoch {i + 1}...')
             df = df.sample(frac=1.0)
             df = EncoderDataFrame(df)
             if self.n_megabatches > 1:
@@ -706,7 +897,7 @@ class AutoEncoder(torch.nn.Module):
                     id_loss = []
                     for i in range(val_batches):
                         start = i * self.eval_batch_size
-                        stop = (i+1) * self.eval_batch_size
+                        stop = (i + 1) * self.eval_batch_size
 
                         slc_in = val_in.iloc[start:stop]
                         slc_out = val_df.iloc[start:stop]
@@ -715,14 +906,13 @@ class AutoEncoder(torch.nn.Module):
                         _, _, _, net_loss = self.compute_loss(num, bin, cat, slc_out)
                         swapped_loss.append(net_loss)
 
-
                         num, bin, cat = self.forward(slc_out)
                         _, _, _, net_loss = self.compute_loss(num, bin, cat, slc_out, _id=True)
                         id_loss.append(net_loss)
 
                     self.logger.end_epoch()
-                    if self.project_embeddings:
-                        self.logger.show_embeddings(self.categorical_fts)
+                    #                     if self.project_embeddings:
+                    #                         self.logger.show_embeddings(self.categorical_fts)
                     if self.verbose:
                         swapped_loss = np.array(swapped_loss).mean()
                         id_loss = np.array(id_loss).mean()
@@ -748,7 +938,7 @@ class AutoEncoder(torch.nn.Module):
         for j in range(n_updates):
 
             start = j * self.batch_size
-            stop = (j+1) * self.batch_size
+            stop = (j + 1) * self.batch_size
             in_sample = input_df.iloc[start:stop]
             target_sample = df.iloc[start:stop]
             num, bin, cat = self.forward(in_sample)
@@ -778,19 +968,19 @@ class AutoEncoder(torch.nn.Module):
         n_rows = len(df)
         n_megabatches = self.n_megabatches
         batch_size = self.batch_size
-        res = n_rows/n_megabatches
+        res = n_rows / n_megabatches
         batches_per_megabatch = (res // batch_size) + 1
         megabatch_size = batches_per_megabatch * batch_size
         final_batch_size = n_rows - (n_megabatches - 1) * megabatch_size
 
         for i in range(n_megabatches):
             megabatch_start = int(i * megabatch_size)
-            megabatch_stop = int((i+1) * megabatch_size)
+            megabatch_stop = int((i + 1) * megabatch_size)
             megabatch = df.iloc[megabatch_start:megabatch_stop]
             megabatch = self.prepare_df(megabatch)
             input_df = megabatch.swap(self.swap_p)
-            if i == (n_megabatches-1):
-                n_updates = int(final_batch_size//batch_size)
+            if i == (n_megabatches - 1):
+                n_updates = int(final_batch_size // batch_size)
                 if final_batch_size % batch_size > 0:
                     n_updates += 1
             else:
@@ -811,7 +1001,7 @@ class AutoEncoder(torch.nn.Module):
             layer > 0 counts layers forward from encoding layer.
         """
         result = []
-        n_batches = len(df)//self.eval_batch_size
+        n_batches = len(df) // self.eval_batch_size
         if len(df) % self.eval_batch_size != 0:
             n_batches += 1
 
@@ -822,7 +1012,7 @@ class AutoEncoder(torch.nn.Module):
         with torch.no_grad():
             for i in range(n_batches):
                 start = i * self.eval_batch_size
-                stop = (i+1) * self.eval_batch_size
+                stop = (i + 1) * self.eval_batch_size
                 num, bin, embeddings = self.encode_input(df.iloc[start:stop])
                 x = torch.cat(num + bin + embeddings, dim=1)
                 if layer <= 0:
@@ -843,7 +1033,7 @@ class AutoEncoder(torch.nn.Module):
         """
         result = []
 
-        n_batches = len(df)//self.eval_batch_size
+        n_batches = len(df) // self.eval_batch_size
         if len(df) % self.eval_batch_size != 0:
             n_batches += 1
 
@@ -855,7 +1045,7 @@ class AutoEncoder(torch.nn.Module):
             for i in range(n_batches):
                 this_batch = []
                 start = i * self.eval_batch_size
-                stop = (i+1) * self.eval_batch_size
+                stop = (i + 1) * self.eval_batch_size
                 num, bin, embeddings = self.encode_input(df.iloc[start:stop])
                 x = torch.cat(num + bin + embeddings, dim=1)
                 for layer in self.encoder:
@@ -869,80 +1059,6 @@ class AutoEncoder(torch.nn.Module):
         result = torch.cat(result, dim=0)
         return result
 
-    def _deserialize_json(self, data):
-        """
-        encodes json data into appropriate features
-        for inference.
-        "data" should be a string.
-        """
-        data = json.loads(data)
-        return data
-        row = pd.DataFrame()
-        for item in data:
-            row[item] = [data[item]]
-        return row
-
-    
-    def compute_targets_dict(self, data):
-        numeric = []
-        for num_name in self.num_names:
-            raw_value = data[num_name]
-            trans_value = self.numeric_fts[num_name]['scaler'].transform(np.array([raw_value]))
-            numeric.append(trans_value)
-        num = torch.tensor(numeric).reshape(1, -1).float().to(self.device)
-
-        binary = []
-        for bin_name in self.bin_names:
-            value = data[bin_name]
-            code = self.binary_fts[bin_name][value]
-            binary.append(int(code))
-        bin = torch.tensor(binary).reshape(1, -1).float().to(self.device)
-        codes = []
-        for ft in self.categorical_fts:
-            category = data[ft]
-            code = self.categorical_fts[ft]['cats'].index(category)
-            code = torch.tensor(code).to(self.device)
-            codes.append(code)
-        return num, bin, codes
-
-    def encode_input_dict(self, data):
-        """
-        Handles raw df inputs.
-        Passes categories through embedding layers.
-        """
-        num, bin, codes = self.compute_targets_dict(data)
-        embeddings = []
-        for i, ft in enumerate(self.categorical_fts):
-            feature = self.categorical_fts[ft]
-            emb = feature['embedding'](codes[i]).reshape(1, -1)
-            embeddings.append(emb)
-        return [num], [bin], embeddings
-
-    def get_deep_stack_features_json(self, data):
-        """
-        gets "deep stack" features for a single record;
-        intended for executing "inference" logic for a
-        network request.
-        data can either be a json string or a dict.
-        """
-        if isinstance(data, str):
-            data = self._deserialize_json(data)
-
-        self.eval()
-
-        with torch.no_grad():
-            this_batch = []
-            num, bin, embeddings = self.encode_input_dict(data)
-            x = torch.cat(num + bin + embeddings, dim=1)
-            for layer in self.encoder:
-                x = layer(x)
-                this_batch.append(x)
-            for layer in self.decoder:
-                x = layer(x)
-                this_batch.append(x)
-            z = torch.cat(this_batch, dim=1)
-        return z
-
     def get_anomaly_score(self, df):
         """
         Returns a per-row loss of the input dataframe.
@@ -953,7 +1069,6 @@ class AutoEncoder(torch.nn.Module):
         num_target, bin_target, codes = self.compute_targets(data)
         with torch.no_grad():
             num, bin, cat = self.forward(data)
-
 
         mse_loss = self.mse(num, num_target)
         net_loss = [mse_loss.data]
@@ -977,13 +1092,12 @@ class AutoEncoder(torch.nn.Module):
             cols = [x for x in self.binary_fts.keys()]
             cols += [x for x in self.numeric_fts.keys()]
             cols += [x for x in self.categorical_fts.keys()]
-            cols += [x for x in self.cyclical_fts.keys()]
             df = pd.DataFrame(index=range(len(x)), columns=cols)
 
         num, bin, cat = self.decode(x)
 
         num_cols = [x for x in self.numeric_fts.keys()]
-        num_df = pd.DataFrame(data=num[:, :len(num_cols)].cpu().numpy(), index=df.index)
+        num_df = pd.DataFrame(data=num.cpu().numpy(), index=df.index)
         num_df.columns = num_cols
         for ft in num_df.columns:
             feature = self.numeric_fts[ft]
@@ -992,18 +1106,6 @@ class AutoEncoder(torch.nn.Module):
             result = pd.Series(index=df.index, data=trans_col)
             num_df[ft] = result
 
-        cyc_cols = [x for x in self.cyclical_fts.keys()]
-        cyc_df = pd.DataFrame(columns=cyc_cols, index=df.index)
-
-        for ft in cyc_cols:
-            iloc = self.num_names.index(ft)
-            col = num[:, iloc]
-            feature = self.cyclical_fts[ft]
-            trans_col = feature['scaler'].inverse_transform(col.cpu().numpy())
-            trans_col = pd.Series(index=df.index, data=trans_col).astype(int)
-            result = pd.to_datetime(trans_col)
-            cyc_df[ft] = result
-
         bin_cols = [x for x in self.binary_fts.keys()]
         bin_df = pd.DataFrame(data=bin.cpu().numpy(), index=df.index)
         bin_df.columns = bin_cols
@@ -1011,22 +1113,22 @@ class AutoEncoder(torch.nn.Module):
         for ft in bin_df.columns:
             feature = self.binary_fts[ft]
             map = {
-                False:feature['cats'][0],
-                True:feature['cats'][1]
+                False: feature['cats'][0],
+                True: feature['cats'][1]
             }
             bin_df[ft] = bin_df[ft].apply(lambda x: map[x])
 
         cat_df = pd.DataFrame(index=df.index)
         for i, ft in enumerate(self.categorical_fts):
             feature = self.categorical_fts[ft]
-            #get argmax excluding NaN column (impute with next-best guess)
+            # get argmax excluding NaN column (impute with next-best guess)
             codes = torch.argmax(cat[i][:, :-1], dim=1).cpu().numpy()
             cat_df[ft] = codes
             cats = feature['cats']
             cat_df[ft] = cat_df[ft].apply(lambda x: cats[x])
 
-        #concat
-        output_df = pd.concat([num_df, bin_df, cat_df, cyc_df], axis=1)
+        # concat
+        output_df = pd.concat([num_df, bin_df, cat_df], axis=1)
 
         return output_df[df.columns]
 
@@ -1046,11 +1148,3 @@ class AutoEncoder(torch.nn.Module):
             output_df = self.decode_to_df(x, df=df)
 
         return output_df
-
-    def save(self, path):
-        """
-        Saves serialized model to input path.
-        """
-        with open(path, 'wb') as f:
-            serialized_model = dill.dumps(self)
-            f.write(serialized_model)
