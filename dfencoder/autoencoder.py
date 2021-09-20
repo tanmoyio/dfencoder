@@ -693,6 +693,7 @@ class AutoEncoder(torch.nn.Module):
             self.add_module(f'decoder_{i}', layer)
 
         # set up predictive outputs
+        print(dim)
         self.build_outputs(dim)
 
         # get optimizer
@@ -737,6 +738,11 @@ class AutoEncoder(torch.nn.Module):
             embeddings.append(emb)
         return [num], [bin], embeddings
 
+    def build_input_tensor(self, df):
+        num, bin, embeddings = self.encode_input(df)
+        x = torch.cat(num + bin + embeddings, dim=1)
+        return x
+
     def compute_outputs(self, x):
         num = self.numeric_output(x)
         bin = self.binary_output(x)
@@ -765,12 +771,12 @@ class AutoEncoder(torch.nn.Module):
         num, bin, cat = self.compute_outputs(x)
         return num, bin, cat
 
-    def forward(self, df):
+    def forward(self, input):
         """We do the thang. Takes pandas dataframe as input."""
-        num, bin, embeddings = self.encode_input(df)
-        x = torch.cat(num + bin + embeddings, dim=1)
+        # num, bin, embeddings = self.encode_input(df)
+        # x = torch.cat(num + bin + embeddings, dim=1)
 
-        encoding = self.encode(x)
+        encoding = self.encode(input)
         num, bin, cat = self.decode(encoding)
 
         return num, bin, cat
@@ -900,13 +906,16 @@ class AutoEncoder(torch.nn.Module):
                         stop = (i + 1) * self.eval_batch_size
 
                         slc_in = val_in.iloc[start:stop]
+                        slc_in_tensor = self.build_input_tensor(slc_in)
+                        
                         slc_out = val_df.iloc[start:stop]
+                        slc_out_tensor = self.build_input_tensor(slc_out)
 
-                        num, bin, cat = self.forward(slc_in)
+                        num, bin, cat = self.forward(slc_in_tensor)
                         _, _, _, net_loss = self.compute_loss(num, bin, cat, slc_out)
                         swapped_loss.append(net_loss)
 
-                        num, bin, cat = self.forward(slc_out)
+                        num, bin, cat = self.forward(slc_out_tensor)
                         _, _, _, net_loss = self.compute_loss(num, bin, cat, slc_out, _id=True)
                         id_loss.append(net_loss)
 
@@ -940,8 +949,10 @@ class AutoEncoder(torch.nn.Module):
             start = j * self.batch_size
             stop = (j + 1) * self.batch_size
             in_sample = input_df.iloc[start:stop]
+            in_sample_tensor = self.build_input_tensor(in_sample)
+            
             target_sample = df.iloc[start:stop]
-            num, bin, cat = self.forward(in_sample)
+            num, bin, cat = self.forward(in_sample_tensor)
             mse, bce, cce, net_loss = self.compute_loss(
                 num, bin, cat, target_sample,
                 logging=True
@@ -1066,9 +1077,12 @@ class AutoEncoder(torch.nn.Module):
         """
         self.eval()
         data = self.prepare_df(df)
+        input = self.build_input_tensor(data)
+
         num_target, bin_target, codes = self.compute_targets(data)
+
         with torch.no_grad():
-            num, bin, cat = self.forward(data)
+            num, bin, cat = self.forward(input)
 
         mse_loss = self.mse(num, num_target)
         net_loss = [mse_loss.data]
