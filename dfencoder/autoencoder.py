@@ -519,7 +519,8 @@ class AutoEncoder(torch.nn.Module):
         dt = df.dtypes
         print(dt)
         print(type(dt))
-        objects = list(dt[dt == pd.Categorical].index)
+        # objects = list(dt[dt == pd.Categorical].index)
+        objects = list(dt[dt == "object"].index)
         print(objects)
         for ft in objects:
             feature = {}
