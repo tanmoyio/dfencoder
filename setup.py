@@ -12,7 +12,7 @@ reqs= [
     'numpy',
     'pandas>=1.0,<1.4.0dev0',
     'tqdm',
-    'scikit-learn',
+    'scikit-learn==0.23.1',
     'tensorboardX',
     'matplotlib', 
     'wheel',
