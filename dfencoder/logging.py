@@ -88,7 +88,7 @@ class IpynbLogger(BasicLogger):
             id_val_loss = np.array(id_val_loss).mean(axis=0)
             self.plt.plot(x, id_val_loss, label='identity val loss', color='pink')
 
-        self.plt.ylim(0, max(1, math.floor(2*self.baseline_loss)))
+        self.plt.ylim(0, max(6, math.floor(2*self.baseline_loss)))
         self.plt.legend()
         self.plt.xlabel('epochs')
         self.plt.ylabel('loss')
