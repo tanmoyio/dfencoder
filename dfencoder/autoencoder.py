@@ -302,15 +302,6 @@ class AutoEncoder(torch.nn.Module):
         else:
             cat_df = pd.DataFrame()
         return cat_df
-    # def get_variable_importance(self, num_names, cat_names, bin_names, mse_loss, bce_loss, cce_loss,
-    #                             cloudtrail_df):
-    #     # Get data in the right format
-    #     num_df = create_numerical_col_max(num_names, mse_loss)
-    #     bool_df = create_binary_col_max(bin_names, bce_loss)
-    #     cat_df = create_categorical_col_max(cat_names, cce_loss)
-    #     variable_importance_df = pd.concat([num_df, bool_df, cat_df], axis=1)
-    #     return variable_importance_df
-
     
     def get_variable_importance(self, num_names, cat_names, bin_names, mse_loss, bce_loss, cce_loss,
                                 cloudtrail_df):
@@ -660,8 +651,6 @@ class AutoEncoder(torch.nn.Module):
 
     def fit(self, df, epochs=1, val=None):
         """Does training."""
-        print(list(self.binary_fts.keys()))
-        print(list(self.numeric_fts.keys()))
         if self.optim is None:
             self.build_model(df)
         if self.n_megabatches == 1:
