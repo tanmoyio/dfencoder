@@ -498,7 +498,6 @@ class AutoEncoder(torch.nn.Module):
             self.add_module(f'decoder_{i}', layer)
 
         # set up predictive outputs
-        print(dim)
         self.build_outputs(dim)
 
         # get optimizer
