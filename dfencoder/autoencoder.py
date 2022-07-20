@@ -262,6 +262,61 @@ class AutoEncoder(torch.nn.Module):
             self.numeric_fts[ft] = feature
 
         self.num_names = list(self.numeric_fts.keys())
+    def create_numerical_col_max(self,num_names, mse_loss):
+        if num_names:
+            num_df = pd.DataFrame(num_names)
+            num_df.columns = ['num_col_max_loss']
+            num_df.reset_index(inplace=True)
+            argmax_df = pd.DataFrame(torch.argmax(mse_loss.cpu(), dim=1).numpy())
+            argmax_df.columns = ['index']
+            num_df = num_df.merge(argmax_df, on='index', how='left')
+            num_df.drop('index', axis=1, inplace=True)
+        else:
+            num_df = pd.DataFrame()
+        return num_df
+
+
+    def create_binary_col_max(self,bin_names, bce_loss):
+        if bin_names:
+            bool_df = pd.DataFrame(bin_names)
+            bool_df.columns = ['bin_col_max_loss']
+            bool_df.reset_index(inplace=True)
+            argmax_df = pd.DataFrame(torch.argmax(bce_loss.cpu(), dim=1).numpy())
+            argmax_df.columns = ['index']
+            bool_df = bool_df.merge(argmax_df, on='index', how='left')
+            bool_df.drop('index', axis=1, inplace=True)
+        else:
+            bool_df = pd.DataFrame()
+        return bool_df
+
+
+    def create_categorical_col_max(self,cat_names, cce_loss):
+        final_list = []
+        if cat_names:
+            for index, val in enumerate(cce_loss):
+                val = pd.DataFrame(val.cpu().numpy())
+                val.columns = [cat_names[index]]
+                final_list.append(val)
+            cat_df = pd.DataFrame(pd.concat(final_list, axis=1).idxmax(axis=1))
+            cat_df.columns = ['cat_col_max_loss']
+        else:
+            cat_df = pd.DataFrame()
+        return cat_df
+    
+    def get_variable_importance(self, num_names, cat_names, bin_names, mse_loss, bce_loss, cce_loss,
+                                cloudtrail_df):
+        # Get data in the right format
+        num_df = self.create_numerical_col_max(num_names, mse_loss)
+        bool_df = self.create_binary_col_max(bin_names, bce_loss)
+        cat_df = self.create_categorical_col_max(cat_names, cce_loss)
+        variable_importance_df = pd.concat([num_df, bool_df, cat_df], axis=1)
+        return variable_importance_df
+    
+    def return_feature_names(self):
+        bin_names = list(self.binary_fts.keys())
+        num_names = list(self.numeric_fts.keys())
+        cat_names = list(self.categorical_fts.keys())
+        return num_names, cat_names, bin_names
 
     def init_cats(self, df):
         dt = df.dtypes
@@ -269,10 +324,6 @@ class AutoEncoder(torch.nn.Module):
         for ft in objects:
             feature = {}
             vl = df[ft].value_counts()
-            if len(vl) < 3:
-                feature['cats'] = list(vl.index)
-                self.binary_fts[ft] = feature
-                continue
             cats = list(vl[vl >= self.min_cats].index)
             feature['cats'] = cats
             self.categorical_fts[ft] = feature
@@ -533,6 +584,7 @@ class AutoEncoder(torch.nn.Module):
         net_loss += list(mse_loss.mean(dim=0).cpu().detach().numpy())
         mse_loss = mse_loss.mean()
         bce_loss = self.bce(bin, bin_target)
+        
         net_loss += list(bce_loss.mean(dim=0).cpu().detach().numpy())
         bce_loss = bce_loss.mean()
         cce_loss = []
@@ -599,7 +651,6 @@ class AutoEncoder(torch.nn.Module):
 
     def fit(self, df, epochs=1, val=None):
         """Does training."""
-
         if self.optim is None:
             self.build_model(df)
         if self.n_megabatches == 1:
@@ -834,7 +885,7 @@ class AutoEncoder(torch.nn.Module):
             net_loss += [loss.data.reshape(-1, 1)]
 
         net_loss = torch.cat(net_loss, dim=1).mean(dim=1)
-        return net_loss.cpu().numpy()
+        return mse_loss, bce_loss,cce_loss,net_loss.cpu().numpy()
 
     def decode_to_df(self, x, df=None):
         """
