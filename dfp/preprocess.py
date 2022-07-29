@@ -28,6 +28,10 @@ import json
 #                     "statusfailureReason"]
 
 
+def _if_dir_not_exists(directory):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
 def _explode_raw(df):
     df2 = pd.json_normalize(df['_raw'].apply(json.loads))
     return df2
@@ -120,6 +124,8 @@ def proc_azure_logs(files,
     """
     if output_grouping is None:
         output_grouping = groupby
+
+    _if_dir_not_exists(save_dir)
     
     if isinstance(files, str):
         if os.path.isdir(files):
@@ -217,6 +223,8 @@ def proc_duo_logs(files,
 
     if output_grouping is None:
         output_grouping = groupby
+
+    _if_dir_not_exists(save_dir)
     
     if isinstance(files, str):
         if os.path.isdir(files):
