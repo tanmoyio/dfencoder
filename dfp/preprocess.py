@@ -204,7 +204,7 @@ def proc_azure_logs(files,
     timing = time.perf_counter() - start_time
 
     num_training_files = len([file for file in os.listdir(save_dir) if file.endswith('_azure.csv')])
-    print("{num_files} training files successfully created in {time:.2f}".format({'num_files': num_training_files, 'time': timing}))
+    print("{num_files} training files successfully created in {time:.2f}".format(num_files=num_training_files, time=timing))
     if num_training_files > 0:
         return True
     else:
@@ -299,7 +299,7 @@ def proc_duo_logs(files,
     timing = time.perf_counter() - start_time
 
     num_training_files = len([file for file in os.listdir(save_dir) if file.endswith('_duo.csv')])
-    print("{num_files} training files successfully created in {time:.2f}".format({'num_files': num_training_files, 'time': timing}))
+    print("{num_files} training files successfully created in {time:.2f}".format(num_files=num_training_files, time=timing))
     if num_training_files > 0:
         return True
     else:
