@@ -5,3 +5,4 @@ MANIFEST
 dist/
 dfp/dask-worker-space/global.lock
 dfp/dask-worker-space/purge.lock
+dfp/dask-worker-space/*.dirlock

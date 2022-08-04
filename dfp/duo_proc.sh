@@ -1,9 +1,9 @@
 #!/bin/sh
 
 FILES=$1
-AWS_ACCESS_KEY=$2
-AWS_SECRET_KEY=$3
-AWS_TOKEN=$4
+# AWS_ACCESS_KEY=$2
+# AWS_SECRET_KEY=$3
+# AWS_TOKEN=$4
 ORIGIN="duo"
 SAVE_DIR="/home/nfs/sdavis/duo_test/20220804_s3_script"
 FILETYPE="json"
@@ -18,10 +18,6 @@ MIN_RECORDS=0
 
 python preprocess.py --origin $ORIGIN \
  --files $FILES \
- --s3 \
- --aws_key $AWS_ACCESS_KEY \
- --aws_secret $AWS_SECRET_KEY \
- --aws_token $AWS_TOKEN \
  --save_dir $SAVE_DIR \
  --filetype $FILETYPE \
  --groupby $GROUPBY \

@@ -248,9 +248,9 @@ def proc_logs(files,
 
     if min_records > 0:
         logs = logs.persist()
-        user_entry_counts = logs[[groupby, 'day']].groupby(groupby).count().compute()
-        trainees = [user for user, count in user_entry_counts.to_dict()['day'].items() if count > min_records]
-        derived_logs[derived_logs[groupby].isin(trainees)].groupby(output_grouping).apply(lambda df: _save_groups(df, save_dir, log_source), meta=derived_meta).size.compute()
+        user_entry_counts = logs[[groupby, timestamp_column]].groupby(groupby).count().compute()
+        trainees = [user for user, count in user_entry_counts.to_dict()[timestamp_column].items() if count > min_records]
+        derived_logs[derived_logs[groupby].isin(trainees)].groupby(output_grouping).apply(lambda df: _save_groups(df, save_dir, log_source), meta=derived_logs._meta).size.compute()
     else:
         derived_logs.groupby(output_grouping).apply(lambda df: _save_groups(df, save_dir, log_source), meta=derived_logs._meta).size.compute()
 
