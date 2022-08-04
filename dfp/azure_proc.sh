@@ -22,6 +22,9 @@ python preprocess.py --origin $ORIGIN \
  --delimiter $DELIMITER \
  --groupby $GROUPBY \
  --timestamp $TIMESTAMP \
+ --city $CITY \
+ --state $STATE \
+ --country $COUNTRY \
  --app $APP \
  --manager $MANAGER \
  --extension $EXTENSION \
