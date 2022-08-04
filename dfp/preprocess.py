@@ -1,18 +1,24 @@
 import time
 import datetime
 import pandas as pd
-from dask import dataframe as dd
+from dask import dataframe as dd, bag as db
+import dask
 from dask.distributed import Client
 import numpy as np
 import os
 import sys
 import argparse
 import json
+import boto3
 
 
 parser = argparse.ArgumentParser(description="Process Duo or Azure logs for DFP")
 parser.add_argument('--origin', choices=['duo', 'azure'], default='duo', help='the type of logs to process: duo or azure')
-parser.add_argument('--files', default=None, help='The directory containing the files to process')
+parser.add_argument('--s3', action='store_true', help='Whether to load the files from s3')
+parser.add_argument('--files', default=None, help='The directory or bucket containing the files to process')
+parser.add_argument('--aws_key', default=None, help='The AWS Access key to use for s3 loading')
+parser.add_argument('--aws_secret', default=None, help='The AWS Secret key to use for s3 loading')
+parser.add_argument('--aws_token', default=None, help='The AWS Token to use for s3 loading')
 parser.add_argument('--save_dir', default=None, help='The directory to save the processed files')
 parser.add_argument('--filetype', default='csv', choices=['csv', 'json', 'jsonline'], help='Switch between csv and jsonlines for processing Azure logs')
 parser.add_argument('--explode_raw', action='store_true', help='Option to explode the _raw key from a jsonline file')
@@ -22,7 +28,7 @@ parser.add_argument('--timestamp', default=None, help='The name of the column co
 parser.add_argument('--city', default=None, help='The name of the column containing the city')
 parser.add_argument('--state', default=None, help="the name of the column containing the state")
 parser.add_argument('--country', default=None, help="The name of the column containing the country")
-parser.add_argument('--app', default='appDisplayName', help="The name of the column containing the application. Does not apply to Duo logs.")
+parser.add_argument('--app', default=None, help="The name of the column containing the application. Does not apply to Duo logs.")
 parser.add_argument('--manager', default=None, help='The column containing the manager name. Leave blank if you want user-level results')
 parser.add_argument('--extension', default=None, help='The extensions of the files to be loaded. Only needed if there are other files in the directory containing the files to be processed')
 parser.add_argument('--min_records', type=int, default=0, help='The minimum number of records needed for a processed user to be saved.')
@@ -34,6 +40,7 @@ _DEFAULT_DATE = '1970-01-01T00:00:00.000000+00:00'
 def _if_dir_not_exists(directory):
     if not os.path.exists(directory):
         os.makedirs(directory)
+
 
 def _explode_raw(df):
     df2 = pd.json_normalize(df['_raw'].apply(json.loads))
@@ -75,11 +82,37 @@ def _parse_time(df, timestamp_column):
     return pdf
 
 
+def _s3_load(access, secret, token, bucket, key, filetype, explode_raw, delimiter):
+    session = boto3.Session(aws_access_key_id=access, aws_secret_access_key=secret, aws_session_token=token)
+    client = session.client('s3')
+    data = client.get_object(Bucket=bucket, Key=key)
+    contents = data['Body']
+    if filetype.startswith('json'):
+        log = json.load(contents)
+        if explode_raw:
+            pdf = pd.json_normalize(log['_raw'])
+        else:
+            pdf = pd.json_normalize(log)
+    else:
+        pdf = pd.read_csv(contents, delimiter=delimiter).fillna
+    return pdf
+
+
+def _load_json(file):
+    with open(file) as json_in:
+        log = json.load(json_in)
+    pdf = pd.json_normalize(log)
+    return pdf
+    
+
 def proc_logs(files, 
                 save_dir,
                 log_source = 'duo',
                 filetype = 'csv',
-                storage_options = {},
+                s3 = False,
+                aws_key = None,
+                aws_secret = None,
+                aws_token = None,
                 explode_raw = False,
                 delimiter = ',',
                 groupby = 'userPrincipalName',
@@ -136,36 +169,69 @@ def proc_logs(files,
         True if more than 1 training file is returned, else False is returned
 
     """
+    start_time = time.perf_counter()
+
     if output_grouping is None:
         output_grouping = groupby
 
     _if_dir_not_exists(save_dir)
     
-    if isinstance(files, str):
-        if os.path.isdir(files):
-            if extension is not None:
-                files = [os.path.join(files, file) for file in os.listdir(files) if file.endswith(extension)]
-            else:
-                files = [os.path.join(files, file) for file in os.listdir(files)]
-        elif os.path.isfile(files):
-            files = [files]
+    if s3:
+        if '/' in files:
+            split_bucket = files.split('/')
+            bucket = split_bucket[0]
+            prefix = split_bucket[1:]
         else:
-            files = []
-    assert isinstance(files, list) and len(files) > 0, 'Please pass a directory, a file-path, or a list of file-paths containing the files to be processed'
-
-    start_time = time.perf_counter()
-    
-    if filetype == 'jsonline':
-        if explode_raw:
-            nested_logs = dd.read_json(files, lines=True, storage_options=storage_options)
-            meta = pd.json_normalize(json.loads(nested_logs.head(1)['_raw'].to_list()[0])).iloc[:0,:].copy()
-            logs = nested_logs.map_partitions(lambda df: _explode_raw(df), meta=meta).fillna('nan')
+            bucket = files
+            prefix = None
+        session = boto3.Session(aws_access_key_id=aws_key, aws_secret_access_key=aws_secret, aws_session_token=aws_token)
+        client = session.client('s3')
+        s3 = session.resource('s3')
+        keys = []
+        if prefix is not None:
+            for content in s3.Bucket(bucket).objects.filter(Prefix=prefix):
+                key = content.key
+                keys.append(key)
         else:
-            logs = dd.read_json(files, lines=True, storage_options=storage_options).fillna('nan')
-    elif filetype == 'json':
-        logs = dd.read_json(files, storage_options=storage_options).fillna('nan')
+            for content in s3.Bucket(bucket).objects.all():
+                key = content.key
+                if not key.startswith('/'):
+                    keys.append(key)
+        if extension is not None:
+            keys = [key for key in keys if key.endswith(extension)]
+        assert len(keys) > 0, 'Please pass a directory, a file-path, or a list of file-paths containing the files to be processed'
+        dfs = [dask.delayed(_s3_load)(aws_key, aws_secret, aws_token, bucket, k, filetype, explode_raw, delimiter) for k in keys]
+        ddfs = [dd.from_delayed(df) for df in dfs]
+        logs = dd.concat(ddfs).fillna('nan')
     else:
-        logs = dd.read_csv(files, delimiter=delimiter, storage_options=storage_options, dtype='object').fillna('nan')
+        if isinstance(files, str):
+            if os.path.isdir(files):
+                if extension is not None:
+                    files = [os.path.join(files, file) for file in os.listdir(files) if file.endswith(extension)]
+                else:
+                    files = [os.path.join(files, file) for file in os.listdir(files)]
+            elif os.path.isfile(files):
+                files = [files]
+            else:
+                files = []
+        assert isinstance(files, list) and len(files) > 0, 'Please pass a directory, a file-path, or a list of file-paths containing the files to be processed'
+        if filetype == 'jsonline':
+            if explode_raw:
+                nested_logs = dd.read_json(files, lines=True)
+                meta = pd.json_normalize(json.loads(nested_logs.head(1)['_raw'].to_list()[0])).iloc[:0,:].copy()
+                logs = nested_logs.map_partitions(lambda df: _explode_raw(df), meta=meta).fillna('nan')
+            else:
+                dfs = [dask.delayed(_load_json)(x) for x in files]
+                # logs = dd.from_delayed(dfs, verify_meta=False)
+                ddfs = [dd.from_delayed(df) for df in dfs]
+                logs = dd.concat(ddfs).fillna('nan')
+        elif filetype == 'json':
+            dfs = [dask.delayed(_load_json)(x) for x in files]
+            # logs = dd.from_delayed(dfs, verify_meta=False)
+            ddfs = [dd.from_delayed(df) for df in dfs]
+            logs = dd.concat(ddfs).fillna('nan')
+        else:
+            logs = dd.read_csv(files, delimiter=delimiter, dtype='object').fillna('nan')
 
     logs_meta = {c: v for c, v in zip(logs._meta, logs._meta.dtypes)}
     logs_meta['time'] = 'datetime64[ns]'
@@ -178,10 +244,12 @@ def proc_logs(files,
 
     derived_logs = logs.groupby(groupby).apply(lambda df: _derived_features(df, timestamp_column, city_column, state_column, country_column, application_column), meta=logs_meta).reset_index(drop=True)
 
+    # derived_meta = derived_logs.head(1).iloc[:0,:].copy()
+
     if min_records > 0:
         logs = logs.persist()
-        user_entry_counts = logs[[groupby, 'day']].groupby(groupby).count().compute()
-        trainees = [user for user, count in user_entry_counts.to_dict()['day'].items() if count > min_records]
+        user_entry_counts = logs[[groupby, timestamp_column]].groupby(groupby).count().compute()
+        trainees = [user for user, count in user_entry_counts.to_dict()[timestamp_column].items() if count > min_records]
         derived_logs[derived_logs[groupby].isin(trainees)].groupby(output_grouping).apply(lambda df: _save_groups(df, save_dir, log_source), meta=derived_logs._meta).size.compute()
     else:
         derived_logs.groupby(output_grouping).apply(lambda df: _save_groups(df, save_dir, log_source), meta=derived_logs._meta).size.compute()
@@ -206,7 +274,11 @@ def _run():
     proc_logs(files=opt.files, 
                         log_source=opt.origin,
                         save_dir=opt.save_dir,
-                        filetype=opt.filetype, 
+                        filetype=opt.filetype,
+                        s3=opt.s3,
+                        aws_key=opt.aws_key,
+                        aws_secret=opt.aws_secret,
+                        aws_token=opt.aws_token,
                         explode_raw=opt.explode_raw,
                         delimiter=opt.delimiter, 
                         groupby=opt.groupby or 'userPrincipalName',

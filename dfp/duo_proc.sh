@@ -1,15 +1,18 @@
 #!/bin/sh
 
 FILES=$1
-ORIGIN="azure"
-SAVE_DIR="/home/nfs/sdavis/azure_test/20220804_s3_script"
+# AWS_ACCESS_KEY=$2
+# AWS_SECRET_KEY=$3
+# AWS_TOKEN=$4
+ORIGIN="duo"
+SAVE_DIR="/home/nfs/sdavis/duo_test/20220804_s3_script"
 FILETYPE="json"
-GROUPBY="properties.userPrincipalName"
-TIMESTAMP="properties.createdDateTime"
-APP="properties.appDisplayName"
-CITY="properties.location.city"
-STATE="properties.location.state"
-COUNTRY="properties.location.countryOrRegion"
+GROUPBY="user.name"
+TIMESTAMP="isotimestamp"
+APP="application.name"
+CITY="access_device.location.city"
+STATE="access_device.location.state"
+COUNTRY="access_device.location.country"
 EXTENSION=".json"
 MIN_RECORDS=0
 
