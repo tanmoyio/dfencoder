@@ -168,6 +168,7 @@ class AutoEncoder(torch.nn.Module):
         self.binary_fts = OrderedDict()
         self.categorical_fts = OrderedDict()
         self.cyclical_fts = OrderedDict()
+        self.feature_loss_stats = dict()
         self.encoder_layers = encoder_layers
         self.decoder_layers = decoder_layers
         self.encoder_activations = encoder_activations
@@ -660,6 +661,11 @@ class AutoEncoder(torch.nn.Module):
             self.logger.baseline_loss = net_loss
         return net_loss
 
+    def _create_stat_dict(t):
+        scaler = StandardScaler()
+        scaler.fit(t)
+        return {'scaler': scaler, 'mean': scaler.mean, 'std': scaler.std}
+
     def fit(self, df, epochs=1, val=None):
         """Does training."""
 
@@ -736,6 +742,16 @@ class AutoEncoder(torch.nn.Module):
                         msg += f"{round(id_loss, 4)} \n\n\n"
                         print(msg)
 
+        #Getting training loss statistics
+
+        mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score(df)
+        for i, ft in enumerate(self.numeric_fts):
+            self.feature_loss_stats[ft] = self._create_stat_dict(mse_loss[:,i])
+        for i, ft in enumerate(self.binary_fts):
+            self.feature_loss_stats[ft] = self._create_stat_dict(bce_loss[:,i])
+        for i, ft in enumerate(self.categorical_fts):
+            self.feature_loss_stats[ft] = self._create_stat_dict(cce_loss[i])
+        
     def train_epoch(self, n_updates, input_df, df, pbar=None):
         """Run regular epoch."""
 
@@ -966,6 +982,29 @@ class AutoEncoder(torch.nn.Module):
             net_loss += [loss.data.reshape(-1, 1)]
 
         net_loss = torch.cat(net_loss, dim=1).mean(dim=1)
+        return net_loss.cpu().numpy()
+
+    def get_scaled_anomaly_scores(self, df):
+        self.eval()
+        data = self.prepare_df(df)
+        num_target, bin_target, codes = self.compute_targets(data)
+        with torch.no_grad():
+            num, bin, cat = self.forward(data)
+
+
+        mse_loss = self.mse(num, num_target)
+        mse_scaled = torch.zeros(mse_loss.shape)
+        for i, ft in self.numeric_fts:
+            mse_scaled[:,i] = self.feature_loss_stats[ft]['scaler'].transform(mse_loss[:,i])
+        bce_loss = self.bce(bin, bin_target)
+        bce_scaled = torch.zeros(bce_loss.shape)
+        for i, ft in self.binary_fts:
+            bce_scaled[:,i] = self.feature_loss_stats[ft]['scaler'].transform(mse_loss[:,i])
+        cce_scaled = []
+        for i, ft in enumerate(self.categorical_fts):
+            loss = self.feature_loss_stats[ft]['scaler'].trainsform(self.cce(cat[i], codes[i]))
+            cce_scaled.append(loss)
+
         return net_loss.cpu().numpy()
 
     def decode_to_df(self, x, df=None):
