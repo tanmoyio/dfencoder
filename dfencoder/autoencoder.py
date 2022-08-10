@@ -651,13 +651,21 @@ class AutoEncoder(torch.nn.Module):
             self.logger.baseline_loss = net_loss
         return net_loss
 
-    def _create_stat_dict(t):
+    def _create_stat_dict(self, t):
         scaler = StandardScaler()
         scaler.fit(t)
-        return {'scaler': scaler, 'mean': scaler.mean, 'std': scaler.std}
+        mean = scaler.mean.item()
+        std = scaler.std.item()
+        return {'scaler': scaler, 'mean': mean, 'std': std}
 
     def fit(self, df, epochs=1, val=None):
         """Does training."""
+        pdf = df.copy()
+        # if val is None:
+        #     pdf_val = None
+        # else:
+        #     pdf_val = val.copy()
+
         if self.optim is None:
             self.build_model(df)
         if self.n_megabatches == 1:
@@ -734,14 +742,14 @@ class AutoEncoder(torch.nn.Module):
                         print(msg)
 
         #Getting training loss statistics
-
-        mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score(df)
+        # mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score(pdf) if pdf_val is None else self.get_anomaly_score(pd.concat([pdf, pdf_val]))
+        mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score(pdf)
         for i, ft in enumerate(self.numeric_fts):
-            self.feature_loss_stats[ft] = self._create_stat_dict(mse_loss[:,i])
+            self.feature_loss_stats[ft] = self._create_stat_dict(pd.Series(mse_loss[:,i]))
         for i, ft in enumerate(self.binary_fts):
-            self.feature_loss_stats[ft] = self._create_stat_dict(bce_loss[:,i])
+            self.feature_loss_stats[ft] = self._create_stat_dict(pd.Series(bce_loss[:,i]))
         for i, ft in enumerate(self.categorical_fts):
-            self.feature_loss_stats[ft] = self._create_stat_dict(cce_loss[i])
+            self.feature_loss_stats[ft] = self._create_stat_dict(pd.Series(cce_loss[i]))
         
     def train_epoch(self, n_updates, input_df, df, pbar=None):
         """Run regular epoch."""
@@ -907,22 +915,24 @@ class AutoEncoder(torch.nn.Module):
     def get_scaled_anomaly_scores(self, df):
         self.eval()
         data = self.prepare_df(df)
+        input = self.build_input_tensor(data)
+
         num_target, bin_target, codes = self.compute_targets(data)
         with torch.no_grad():
-            num, bin, cat = self.forward(data)
+            num, bin, cat = self.forward(input)
 
 
         mse_loss = self.mse(num, num_target)
         mse_scaled = torch.zeros(mse_loss.shape)
-        for i, ft in self.numeric_fts:
-            mse_scaled[:,i] = self.feature_loss_stats[ft]['scaler'].transform(mse_loss[:,i])
+        for i, ft in enumerate(self.numeric_fts):
+            mse_scaled[:,i] = torch.tensor(self.feature_loss_stats[ft]['scaler'].transform(mse_loss[:,i].numpy()))
         bce_loss = self.bce(bin, bin_target)
         bce_scaled = torch.zeros(bce_loss.shape)
-        for i, ft in self.binary_fts:
-            bce_scaled[:,i] = self.feature_loss_stats[ft]['scaler'].transform(mse_loss[:,i])
+        for i, ft in enumerate(self.binary_fts):
+            bce_scaled[:,i] = torch.tensor(self.feature_loss_stats[ft]['scaler'].transform(mse_loss[:,i].numpy()))
         cce_scaled = []
         for i, ft in enumerate(self.categorical_fts):
-            loss = self.feature_loss_stats[ft]['scaler'].trainsform(self.cce(cat[i], codes[i]))
+            loss = torch.tensor(self.feature_loss_stats[ft]['scaler'].transform(self.cce(cat[i], codes[i]).numpy()))
             cce_scaled.append(loss)
 
         return mse_scaled, bce_scaled, cce_scaled
@@ -992,3 +1002,37 @@ class AutoEncoder(torch.nn.Module):
             output_df = self.decode_to_df(x, df=df)
 
         return output_df
+
+    def get_results(self, df, return_abs = False):
+        pdf = df.copy()
+        orig_cols = pdf.columns
+        self.eval()
+        data = self.prepare_df(df)
+        with torch.no_grad():
+            num, bin, embeddings = self.encode_input(data)
+            x = torch.cat(num + bin + embeddings, dim=1)
+            x = self.encode(x)
+            output_df = self.decode_to_df(x, df=df)
+        mse, bce, cce, _ = self.get_anomaly_score(df)
+        mse_scaled, bce_scaled, cce_scaled = self.get_scaled_anomaly_scores(df)
+        for i, ft in enumerate(self.numeric_fts):
+            pdf[ft+'_pred'] = output_df[ft]
+            pdf[ft+'_loss'] = mse[:, i]
+            pdf[ft+'_z_loss'] = mse_scaled[:, i] if not return_abs else abs(mse_scaled[:, i])
+        for i, ft in enumerate(self.binary_fts):
+            pdf[ft+'_pred'] = output_df[ft]
+            pdf[ft+'_loss'] = bce[:, i]
+            pdf[ft+'_z_loss'] = bce_scaled[:, i] if not return_abs else abs(bce_scaled[:, i])
+        for i, ft in enumerate(self.categorical_fts):
+            pdf[ft+'_pred'] = output_df[ft]
+            pdf[ft+'_loss'] = cce[i]
+            pdf[ft+'_z_loss'] = cce_scaled[i] if not return_abs else abs(cce_scaled[i])
+        all_cols = [[c, c+'_pred', c+'_loss', c+'_z_loss'] for c in orig_cols]
+        result_cols = [col for col_collection in all_cols for col in col_collection]
+        z_losses = [c+'_z_loss' for c in orig_cols]
+        pdf['max_abs_z'] = pdf[z_losses].max(axis=1)
+        pdf['mean_abs_z'] = pdf[z_losses].mean(axis=1)
+        result_cols.append('max_abs_z')
+        result_cols.append('mean_abs_z')
+        return pdf[result_cols]
+        
