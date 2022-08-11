@@ -745,11 +745,11 @@ class AutoEncoder(torch.nn.Module):
         # mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score(pdf) if pdf_val is None else self.get_anomaly_score(pd.concat([pdf, pdf_val]))
         mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score(pdf)
         for i, ft in enumerate(self.numeric_fts):
-            self.feature_loss_stats[ft] = self._create_stat_dict(pd.Series(mse_loss[:,i]))
+            self.feature_loss_stats[ft] = self._create_stat_dict(pd.Series(mse_loss[:,i].cpu()))
         for i, ft in enumerate(self.binary_fts):
-            self.feature_loss_stats[ft] = self._create_stat_dict(pd.Series(bce_loss[:,i]))
+            self.feature_loss_stats[ft] = self._create_stat_dict(pd.Series(bce_loss[:,i].cpu()))
         for i, ft in enumerate(self.categorical_fts):
-            self.feature_loss_stats[ft] = self._create_stat_dict(pd.Series(cce_loss[i]))
+            self.feature_loss_stats[ft] = self._create_stat_dict(pd.Series(cce_loss[i].cpu()))
         
     def train_epoch(self, n_updates, input_df, df, pbar=None):
         """Run regular epoch."""
@@ -925,14 +925,14 @@ class AutoEncoder(torch.nn.Module):
         mse_loss = self.mse(num, num_target)
         mse_scaled = torch.zeros(mse_loss.shape)
         for i, ft in enumerate(self.numeric_fts):
-            mse_scaled[:,i] = torch.tensor(self.feature_loss_stats[ft]['scaler'].transform(mse_loss[:,i].numpy()))
+            mse_scaled[:,i] = torch.tensor(self.feature_loss_stats[ft]['scaler'].transform(mse_loss[:,i].cpu().numpy()))
         bce_loss = self.bce(bin, bin_target)
         bce_scaled = torch.zeros(bce_loss.shape)
         for i, ft in enumerate(self.binary_fts):
-            bce_scaled[:,i] = torch.tensor(self.feature_loss_stats[ft]['scaler'].transform(mse_loss[:,i].numpy()))
+            bce_scaled[:,i] = torch.tensor(self.feature_loss_stats[ft]['scaler'].transform(mse_loss[:,i].cpu().numpy()))
         cce_scaled = []
         for i, ft in enumerate(self.categorical_fts):
-            loss = torch.tensor(self.feature_loss_stats[ft]['scaler'].transform(self.cce(cat[i], codes[i]).numpy()))
+            loss = torch.tensor(self.feature_loss_stats[ft]['scaler'].transform(self.cce(cat[i], codes[i]).cpu().numpy()))
             cce_scaled.append(loss)
 
         return mse_scaled, bce_scaled, cce_scaled
