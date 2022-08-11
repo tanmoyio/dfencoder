@@ -1017,16 +1017,16 @@ class AutoEncoder(torch.nn.Module):
         mse_scaled, bce_scaled, cce_scaled = self.get_scaled_anomaly_scores(df)
         for i, ft in enumerate(self.numeric_fts):
             pdf[ft+'_pred'] = output_df[ft]
-            pdf[ft+'_loss'] = mse[:, i]
-            pdf[ft+'_z_loss'] = mse_scaled[:, i] if not return_abs else abs(mse_scaled[:, i])
+            pdf[ft+'_loss'] = mse[:, i].cpu().numpy()
+            pdf[ft+'_z_loss'] = mse_scaled[:, i].cpu().numpy() if not return_abs else abs(mse_scaled[:, i].cpu().numpy())
         for i, ft in enumerate(self.binary_fts):
             pdf[ft+'_pred'] = output_df[ft]
-            pdf[ft+'_loss'] = bce[:, i]
-            pdf[ft+'_z_loss'] = bce_scaled[:, i] if not return_abs else abs(bce_scaled[:, i])
+            pdf[ft+'_loss'] = bce[:, i].cpu().numpy()
+            pdf[ft+'_z_loss'] = bce_scaled[:, i].cpu().numpy() if not return_abs else abs(bce_scaled[:, i].cpu().numpy())
         for i, ft in enumerate(self.categorical_fts):
             pdf[ft+'_pred'] = output_df[ft]
-            pdf[ft+'_loss'] = cce[i]
-            pdf[ft+'_z_loss'] = cce_scaled[i] if not return_abs else abs(cce_scaled[i])
+            pdf[ft+'_loss'] = cce[i].cpu().numpy()
+            pdf[ft+'_z_loss'] = cce_scaled[i].cpu().numpy() if not return_abs else abs(cce_scaled[i].cpu().numpy())
         all_cols = [[c, c+'_pred', c+'_loss', c+'_z_loss'] for c in orig_cols]
         result_cols = [col for col_collection in all_cols for col in col_collection]
         z_losses = [c+'_z_loss' for c in orig_cols]
