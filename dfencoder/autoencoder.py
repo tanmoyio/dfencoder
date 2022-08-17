@@ -745,13 +745,13 @@ class AutoEncoder(torch.nn.Module):
         # mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score(pdf) if pdf_val is None else self.get_anomaly_score(pd.concat([pdf, pdf_val]))
         mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score(pdf)
         for i, ft in enumerate(self.numeric_fts):
-            i_loss = mse_loss[:,i].cpu().to_numpy()
+            i_loss = mse_loss[:,i].cpu().numpy()
             self.feature_loss_stats[ft] = self._create_stat_dict(i_loss)
         for i, ft in enumerate(self.binary_fts):
-            i_loss = bce_loss[:,i].cpu().to_numpy()
+            i_loss = bce_loss[:,i].cpu().numpy()
             self.feature_loss_stats[ft] = self._create_stat_dict(i_loss)
         for i, ft in enumerate(self.categorical_fts):
-            i_loss = cce_loss[i].cpu().to_numpy()
+            i_loss = cce_loss[i].cpu().numpy()
             self.feature_loss_stats[ft] = self._create_stat_dict(i_loss)
         
     def train_epoch(self, n_updates, input_df, df, pbar=None):
