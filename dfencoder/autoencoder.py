@@ -651,11 +651,11 @@ class AutoEncoder(torch.nn.Module):
             self.logger.baseline_loss = net_loss
         return net_loss
 
-    def _create_stat_dict(self, t):
+    def _create_stat_dict(self, a):
         scaler = StandardScaler()
-        scaler.fit(t)
-        mean = scaler.mean.item()
-        std = scaler.std.item()
+        scaler.fit(a)
+        mean = scaler.mean
+        std = scaler.std
         return {'scaler': scaler, 'mean': mean, 'std': std}
 
     def fit(self, df, epochs=1, val=None):
@@ -745,11 +745,14 @@ class AutoEncoder(torch.nn.Module):
         # mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score(pdf) if pdf_val is None else self.get_anomaly_score(pd.concat([pdf, pdf_val]))
         mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score(pdf)
         for i, ft in enumerate(self.numeric_fts):
-            self.feature_loss_stats[ft] = self._create_stat_dict(pd.Series(mse_loss[:,i].cpu()))
+            i_loss = mse_loss[:,i].cpu().to_numpy()
+            self.feature_loss_stats[ft] = self._create_stat_dict(i_loss)
         for i, ft in enumerate(self.binary_fts):
-            self.feature_loss_stats[ft] = self._create_stat_dict(pd.Series(bce_loss[:,i].cpu()))
+            i_loss = bce_loss[:,i].cpu().to_numpy()
+            self.feature_loss_stats[ft] = self._create_stat_dict(i_loss)
         for i, ft in enumerate(self.categorical_fts):
-            self.feature_loss_stats[ft] = self._create_stat_dict(pd.Series(cce_loss[i].cpu()))
+            i_loss = cce_loss[i].cpu().to_numpy()
+            self.feature_loss_stats[ft] = self._create_stat_dict(i_loss)
         
     def train_epoch(self, n_updates, input_df, df, pbar=None):
         """Run regular epoch."""
