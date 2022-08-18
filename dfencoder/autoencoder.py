@@ -743,7 +743,7 @@ class AutoEncoder(torch.nn.Module):
 
         #Getting training loss statistics
         # mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score(pdf) if pdf_val is None else self.get_anomaly_score(pd.concat([pdf, pdf_val]))
-        mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score(pdf)
+        mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score_with_losses(pdf)
         for i, ft in enumerate(self.numeric_fts):
             i_loss = mse_loss[:,i].cpu().numpy()
             self.feature_loss_stats[ft] = self._create_stat_dict(i_loss)
@@ -888,11 +888,7 @@ class AutoEncoder(torch.nn.Module):
         result = torch.cat(result, dim=0)
         return result
 
-    def get_anomaly_score(self, df):
-        """
-        Returns a per-row loss of the input dataframe.
-        Does not corrupt inputs.
-        """
+    def get_anomaly_score_with_losses(self, df):
         self.eval()
         data = self.prepare_df(df)
         input = self.build_input_tensor(data)
@@ -914,6 +910,13 @@ class AutoEncoder(torch.nn.Module):
 
         net_loss = torch.cat(net_loss, dim=1).mean(dim=1)
         return mse_loss, bce_loss,cce_loss,net_loss.cpu().numpy()
+
+    def get_anomaly_score(self, df):
+        """
+        Returns a per-row loss of the input dataframe.
+        Does not corrupt inputs.
+        """
+        return self.get_anomaly_score_with_losses(df)[3]
 
     def get_scaled_anomaly_scores(self, df):
         self.eval()
@@ -1016,7 +1019,7 @@ class AutoEncoder(torch.nn.Module):
             x = torch.cat(num + bin + embeddings, dim=1)
             x = self.encode(x)
             output_df = self.decode_to_df(x, df=df)
-        mse, bce, cce, _ = self.get_anomaly_score(df)
+        mse, bce, cce, _ = self.get_anomaly_score_with_losses(df)
         mse_scaled, bce_scaled, cce_scaled = self.get_scaled_anomaly_scores(df)
         for i, ft in enumerate(self.numeric_fts):
             pdf[ft+'_pred'] = output_df[ft]
