@@ -658,7 +658,7 @@ class AutoEncoder(torch.nn.Module):
         std = scaler.std
         return {'scaler': scaler, 'mean': mean, 'std': std}
 
-    def fit(self, df, epochs=1, val=None):
+    def fit(self, df, epochs=1, val=None, patience=5):
         """Does training."""
         pdf = df.copy()
         # if val is None:
@@ -687,6 +687,9 @@ class AutoEncoder(torch.nn.Module):
         n_updates = len(df) // self.batch_size
         if len(df) % self.batch_size > 0:
             n_updates += 1
+        last_loss = 5000
+        
+        count_es = 0
         for i in range(epochs):
             self.train()
             if self.verbose:
@@ -724,6 +727,26 @@ class AutoEncoder(torch.nn.Module):
                         num, bin, cat = self.forward(slc_out_tensor)
                         _, _, _, net_loss = self.compute_loss(num, bin, cat, slc_out, _id=True)
                         id_loss.append(net_loss)
+                    
+                    #Earlystopping
+                    current_net_loss = net_loss
+                    print('The Current Net Loss:', current_net_loss)
+
+                    if current_net_loss > last_loss:
+                        count_es += 1
+                        print('Early stop count:', count_es)
+
+                        if count_es >= patience:
+                            print('Early stopping!\n')
+                            break
+
+                    else:
+                        print('set count for earlystop: 0')
+                        count_es = 0
+
+                    last_loss = current_net_loss
+
+                    
 
                     self.logger.end_epoch()
                     #                     if self.project_embeddings:
@@ -740,6 +763,7 @@ class AutoEncoder(torch.nn.Module):
                         msg += 'net validation loss, unaltered input: \n'
                         msg += f"{round(id_loss, 4)} \n\n\n"
                         print(msg)
+                        
 
         #Getting training loss statistics
         # mse_loss, bce_loss, cce_loss, _ = self.get_anomaly_score(pdf) if pdf_val is None else self.get_anomaly_score(pd.concat([pdf, pdf_val]))
