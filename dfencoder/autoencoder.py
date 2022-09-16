@@ -897,10 +897,16 @@ class AutoEncoder(torch.nn.Module):
         cat_df = pd.DataFrame(index=df.index)
         for i, ft in enumerate(self.categorical_fts):
             feature = self.categorical_fts[ft]
-            # get argmax excluding NaN column (impute with next-best guess)
-            codes = torch.argmax(cat[i][:, :-1], dim=1).cpu().numpy()
-            cat_df[ft] = codes
             cats = feature['cats']
+
+            if (len(cats) > 0):
+                # get argmax excluding NaN column (impute with next-best guess)
+                codes = torch.argmax(cat[i][:, :-1], dim=1).cpu().numpy()
+            else:
+                # Only one option
+                codes = torch.argmax(cat[i], dim=1).cpu().numpy()
+            cat_df[ft] = codes
+            cats = feature['cats'] + ["_other"]
             cat_df[ft] = cat_df[ft].apply(lambda x: cats[x])
 
         # concat
