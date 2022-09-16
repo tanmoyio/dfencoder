@@ -1,5 +1,9 @@
+import typing
+
 import numpy as np
+import torch
 from sklearn.preprocessing import QuantileTransformer
+
 
 class StandardScaler(object):
     """Impliments standard (mean/std) scaling."""
@@ -8,25 +12,42 @@ class StandardScaler(object):
         self.mean = None
         self.std = None
 
-    def fit(self, x):
-        self.mean = x.mean()
-        self.std = x.std()
+    def fit(self, x: torch.Tensor):
+        self.mean = x.mean().item()
+        self.std = x.std().item()
 
-    def transform(self, x):
-        result = x.astype(float)
+        # Having a std == 0 (when all values are the same), breaks training. Just use 1.0 in this case
+        if (self.std == 0):
+            self.std = 1.0
+
+    def transform(self, x: typing.Union[torch.Tensor, np.ndarray]):
+
+        # Ensure we are in the right floating point format
+        if (isinstance(x, torch.Tensor)):
+            result = x.to(dtype=torch.float32, copy=True)
+        elif (isinstance(x, np.ndarray)):
+            result = x.astype(float)
+
         result -= self.mean
         result /= self.std
         return result
 
-    def inverse_transform(self, x):
-        result = x.astype(float)
+    def inverse_transform(self, x: torch.Tensor):
+
+        # Ensure we are in the right floating point format
+        if (isinstance(x, torch.Tensor)):
+            result = x.to(dtype=torch.float32, copy=True)
+        elif (isinstance(x, np.ndarray)):
+            result = x.astype(float)
+
         result *= self.std
         result += self.mean
         return result
 
-    def fit_transform(self, x):
+    def fit_transform(self, x: torch.Tensor):
         self.fit(x)
         return self.transform(x)
+
 
 class GaussRankScaler(object):
     """
@@ -57,6 +78,7 @@ class GaussRankScaler(object):
     def fit_transform(self, x):
         self.fit(x)
         return self.transform(x)
+
 
 class NullScaler(object):
 
