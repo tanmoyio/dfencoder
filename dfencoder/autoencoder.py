@@ -692,7 +692,7 @@ class AutoEncoder(torch.nn.Module):
                         _, _, _, net_loss = self.compute_loss(num, bin, cat, slc_out, _id=True)
                         id_loss.append(net_loss)
 
-                    #Earlystopping
+                    # Early stopping
                     current_net_loss = net_loss
                     if self.verbose:
                         print('The Current Net Loss:', current_net_loss)
@@ -703,13 +703,12 @@ class AutoEncoder(torch.nn.Module):
                             print('Early stop count:', count_es)
 
                         if count_es >= patience:
-                            if self.verbose:
-                                print('Early stopping!\n')
+                            print('Early stopping: early stop count({}) >= patience({})'.format(count_es, patience))
                             break
 
                     else:
                         if self.verbose:
-                            print('set count for earlystop: 0')
+                            print('Set count for earlystop: 0')
                         count_es = 0
 
                     self.logger.end_epoch()
