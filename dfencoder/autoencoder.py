@@ -166,6 +166,7 @@ class AutoEncoder(torch.nn.Module):
                  n_megabatches=1,
                  scaler='standard',
                  patience=5,
+                 preset_cats=None,
                  *args,
                  **kwargs):
         super(AutoEncoder, self).__init__(*args, **kwargs)
@@ -181,6 +182,7 @@ class AutoEncoder(torch.nn.Module):
         self.encoder_dropout = encoder_dropout
         self.decoder_dropout = decoder_dropout
         self.min_cats = min_cats
+        self.preset_cats = preset_cats
         self.encoder = []
         self.decoder = []
         self.train_mode = self.train
@@ -333,8 +335,11 @@ class AutoEncoder(torch.nn.Module):
         self.bin_names = list(self.binary_fts.keys())
 
     def init_features(self, df):
+        if self.preset_cats is not None:
+            self.categorical_fts = self.preset_cats
+        else:
+            self.init_cats(df)
         self.init_numeric(df)
-        self.init_cats(df)
         self.init_binary(df)
 
     def build_inputs(self):
@@ -1017,6 +1022,9 @@ class AutoEncoder(torch.nn.Module):
             x = torch.cat(num + bin + embeddings, dim=1)
             x = self.encode(x)
             output_df = self.decode_to_df(x)
+            
+        # set the index of the prediction df to match the input df    
+        output_df.index = df.index
 
         mse, bce, cce = self.get_anomaly_score_losses(df)
         mse_scaled, bce_scaled, cce_scaled = self.scale_losses(mse, bce, cce)
