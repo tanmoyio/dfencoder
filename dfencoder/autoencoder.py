@@ -165,6 +165,7 @@ class AutoEncoder(torch.nn.Module):
                  progress_bar=True,
                  n_megabatches=1,
                  scaler='standard',
+                 patience=5,
                  *args,
                  **kwargs):
         super(AutoEncoder, self).__init__(*args, **kwargs)
@@ -224,6 +225,8 @@ class AutoEncoder(torch.nn.Module):
         self.project_embeddings = project_embeddings
 
         self.scaler = scaler
+        
+        self.patience = patience
 
         self.n_megabatches = n_megabatches
 
@@ -622,7 +625,7 @@ class AutoEncoder(torch.nn.Module):
         std = scaler.std
         return {'scaler': scaler, 'mean': mean, 'std': std}
 
-    def fit(self, df, epochs=1, val=None, patience=5):
+    def fit(self, df, epochs=1, val=None):
         """Does training."""
         pdf = df.copy()
         # if val is None:
@@ -702,8 +705,9 @@ class AutoEncoder(torch.nn.Module):
                         if self.verbose:
                             print('Early stop count:', count_es)
 
-                        if count_es >= patience:
-                            print('Early stopping: early stop count({}) >= patience({})'.format(count_es, patience))
+                        if count_es >= self.patience:
+                            if self.verbose:
+                                print('Early stopping: early stop count({}) >= patience({})'.format(count_es, self.patience))
                             break
 
                     else:
