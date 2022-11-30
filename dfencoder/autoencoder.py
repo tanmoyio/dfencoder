@@ -720,6 +720,8 @@ class AutoEncoder(torch.nn.Module):
                             print('Set count for earlystop: 0')
                         count_es = 0
 
+                    last_loss = current_net_loss
+
                     self.logger.end_epoch()
                     #                     if self.project_embeddings:
                     #                         self.logger.show_embeddings(self.categorical_fts)
