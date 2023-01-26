@@ -973,26 +973,45 @@ class AutoEncoder(torch.nn.Module):
         return mse, bce, cce, net
 
     def get_anomaly_score_losses(self, df):
+        """
+        Run the input dataframe `df` through the autoencoder to get the recovery losses by feature type 
+        (numerical/boolean/categorical). 
+        """
         self.eval()
-        data = self.prepare_df(df)
-        input = self.build_input_tensor(data)
 
-        num_target, bin_target, codes = self.compute_targets(data)
+        n_batches = len(df) // self.batch_size
+        if len(df) % self.batch_size > 0:
+            n_batches += 1
 
+        mse_loss_slices, bce_loss_slices, cce_loss_slices = [], [], []
         with torch.no_grad():
-            num, bin, cat = self.forward(input)
+            for i in range(n_batches):
+                start = i * self.batch_size
+                stop = (i + 1) * self.batch_size
 
-        mse_loss: torch.Tensor = self.mse(num, num_target)
-        bce_loss: torch.Tensor = self.bce(bin, bin_target)
-        cce_loss = []
-        for i, ft in enumerate(self.categorical_fts):
-            loss = self.cce(cat[i], codes[i])
-            # Convert to 2 dimensions
-            cce_loss.append(loss.data.reshape(-1, 1))
+                df_slice = df.iloc[start:stop]
+                data_slice = self.prepare_df(df_slice)
+                num_target, bin_target, codes = self.compute_targets(data_slice)
 
-        # Join all categories into a single tensor
-        cce_loss = torch.cat(cce_loss, dim=1)
+                input_slice = self.build_input_tensor(data_slice)
 
+                num, bin, cat = self.forward(input_slice)
+                mse_loss_slice: torch.Tensor = self.mse(num, num_target)
+                bce_loss_slice: torch.Tensor = self.bce(bin, bin_target)
+                cce_loss_slice_of_each_feat = [] # each entry in this list is the cce loss of a feature, ordered by the feature list self.categorical_fts
+                for i, ft in enumerate(self.categorical_fts):
+                    loss = self.cce(cat[i], codes[i])
+                    # Convert to 2 dimensions
+                    cce_loss_slice_of_each_feat.append(loss.data.reshape(-1, 1))
+                cce_loss_slice = torch.cat(cce_loss_slice_of_each_feat, dim=1) # merge the tensors into one (n_records * n_features) tensor
+
+                mse_loss_slices.append(mse_loss_slice)
+                bce_loss_slices.append(bce_loss_slice)
+                cce_loss_slices.append(cce_loss_slice)
+        
+        mse_loss = torch.cat(mse_loss_slices, dim=0)
+        bce_loss = torch.cat(bce_loss_slices, dim=0)
+        cce_loss = torch.cat(cce_loss_slices, dim=0)
         return mse_loss, bce_loss, cce_loss
 
     def scale_losses(self, mse, bce, cce):
