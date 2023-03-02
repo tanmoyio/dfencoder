@@ -58,7 +58,7 @@ reqs= [
     'numpy',
     'pandas>=1.0,<1.4.0dev0',
     'tqdm',
-    'scikit-learn==0.23.1',
+    'scikit-learn>=1.0',
     'tensorboardX',
     'matplotlib', 
     'wheel',
